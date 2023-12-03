@@ -65,7 +65,7 @@ void* send_ntp(void* arg) {
 	unsigned char packet[NTP_SIZE] = {0};
 	packet[0] = 0b11100011;
 
-	for (int j = 0; j < 10; j++) {
+	for (int j = 0; j < SN_DEFAULT_REQS_CLT; j++) {
 	for (int i = thread_arg->start_client; i < thread_arg->end_client; i++) {
 		if (sendto(thread_arg->clients[i], packet, NTP_SIZE, 0, 
 				(struct sockaddr*)&ntp_server_sin, sizeof(ntp_server_sin)) 
@@ -74,6 +74,7 @@ void* send_ntp(void* arg) {
 			exit(EXIT_FAILURE);
 		}
 	}
+	usleep(1000);
 	}
 
 	return NULL;
@@ -120,12 +121,23 @@ int main(int argc, char** argv) {
 	}
 
 	int n_threads = sysconf(_SC_NPROCESSORS_ONLN);
+	if (n_clients < n_threads) n_threads = n_clients;
 	pthread_t send_threads[n_threads];
 	SendThreadArg send_thread_args[n_threads];
 
 	int base_clients_per_thread = n_clients / n_threads;
 	int rem_clients = n_clients % n_threads;
 	int start_client = 0;
+
+	struct timespec start_time, end_time;
+
+	printf("Sending NTP requests...\n");
+	printf("    Clients: %d\n", n_clients);
+	printf("    Threads: %d\n", n_threads);
+	printf("    Packets per client: %d\n", SN_DEFAULT_REQS_CLT);
+	printf("    Total packets: %d\n", SN_DEFAULT_REQS_CLT * n_clients);
+
+	clock_gettime(CLOCK_MONOTONIC, &start_time);
 
 	for (int i = 0; i < n_threads; i++) {
 		int clients_for_thread = base_clients_per_thread 
@@ -148,10 +160,17 @@ int main(int argc, char** argv) {
 		}
 	}
 
-
 	for (int i = 0; i < n_threads; i++) {
 		pthread_join(send_threads[i], NULL);
 	}
+
+	clock_gettime(CLOCK_MONOTONIC, &end_time);	
+
+	double dt = end_time.tv_sec - start_time.tv_sec + (end_time.tv_nsec
+			- start_time.tv_nsec) / 1e9;
+	
+	printf("Sent requests in %f seconds\n", dt);
+	printf("    Rate: %g pps\n", SN_DEFAULT_REQS_CLT * n_clients / dt);
 
 	for (int i = 0; i < n_clients; i++) {
 		close(clients[i]);

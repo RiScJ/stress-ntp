@@ -6,6 +6,7 @@
 
 #define SN_MAX_SPORT 			65535
 #define SN_MIN_SPORT 			1024
-#define SN_DEFAULT_N_CLIENTS 	100
+#define SN_DEFAULT_N_CLIENTS 	8
+#define SN_DEFAULT_REQS_CLT		10000
 
 #endif
