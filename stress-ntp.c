@@ -9,6 +9,11 @@ int create_client(const in_addr_t daddr, int* sockfd) {
 		return SN_ERR_SOCKET; 
 	}
 
+	int flags = fcntl(*sockfd, F_GETFL, 0);
+	if (flags == -1) return SN_ERR_FC_GET;
+	flags |= O_NONBLOCK;
+	if (fcntl(*sockfd, F_SETFL, flags) == -1) return SN_ERR_FC_SET;
+
 	// Specify information for the server
 	daddr_sin.sin_family = AF_INET; // IPv4 address family
 	daddr_sin.sin_port = htons(NTP_PORT); // NTP service
@@ -48,6 +53,32 @@ int resolve_fqdn(char* fqdn, in_addr_t* daddr) {
     return 0;
 }
 
+void* send_ntp(void* arg) {
+	SendThreadArg* thread_arg = (SendThreadArg*)arg;
+
+	struct sockaddr_in ntp_server_sin;
+	memset(&ntp_server_sin, 0, sizeof(ntp_server_sin));
+	ntp_server_sin.sin_family = AF_INET;
+	ntp_server_sin.sin_port = htons(NTP_PORT);
+	ntp_server_sin.sin_addr.s_addr = thread_arg->daddr;
+
+	unsigned char packet[NTP_SIZE] = {0};
+	packet[0] = 0b11100011;
+
+	for (int j = 0; j < 10; j++) {
+	for (int i = thread_arg->start_client; i < thread_arg->end_client; i++) {
+		if (sendto(thread_arg->clients[i], packet, NTP_SIZE, 0, 
+				(struct sockaddr*)&ntp_server_sin, sizeof(ntp_server_sin)) 
+				< 0) {
+			fprintf(stderr, "Error sending packet\n");
+			exit(EXIT_FAILURE);
+		}
+	}
+	}
+
+	return NULL;
+}
+
 int main(int argc, char** argv) {
 	if (argc < 2) {
 		fprintf(stderr, "Insufficient arguments\n");
@@ -72,23 +103,54 @@ int main(int argc, char** argv) {
 		switch (create_client(daddr, &clients[i])) {
 			case SN_ERR_SOCKET:
 				fprintf(stderr, "Failed to create socket for client %d\n", i);
-				for (int j = 0; j < i; j++) {
-					close(clients[j]);
-				}
+				for (int j = 0; j < i; j++) close(clients[j]);
 				exit(EXIT_FAILURE);
-			case SN_ERR_BIND:
-				fprintf(stderr, "Failed to bind socket for client %d\n", i);
-				for (int j = 0; j < i; j++) {
-					close(clients[j]);
-				}
+			case SN_ERR_FC_GET:
+				fprintf(stderr, "Failed to get socket flags\n");
+				for (int j = 0; j < i; j++) close(clients[j]);
+				exit(EXIT_FAILURE);
+			case SN_ERR_FC_SET:
+				fprintf(stderr, "Failed to set socket flags\n");
 				exit(EXIT_FAILURE);
 			case SN_ERR_CONNECT:
 				fprintf(stderr, "Failed to connect socket for client %d\n", i);
-				for (int j = 0; j < i; j++) {
-					close(clients[j]);
-				}
+				for (int j = 0; j < i; j++) close(clients[j]);
 				exit(EXIT_FAILURE);
 		}
+	}
+
+	int n_threads = sysconf(_SC_NPROCESSORS_ONLN);
+	pthread_t send_threads[n_threads];
+	SendThreadArg send_thread_args[n_threads];
+
+	int base_clients_per_thread = n_clients / n_threads;
+	int rem_clients = n_clients % n_threads;
+	int start_client = 0;
+
+	for (int i = 0; i < n_threads; i++) {
+		int clients_for_thread = base_clients_per_thread 
+				+ (i < rem_clients ? 1 : 0);
+		
+		send_thread_args[i].start_client = start_client;
+		send_thread_args[i].end_client = start_client + clients_for_thread;
+		send_thread_args[i].clients = clients;
+		send_thread_args[i].daddr = daddr;
+
+		start_client += clients_for_thread;
+
+		if (pthread_create(&send_threads[i], NULL, send_ntp, 
+				&send_thread_args[i]) != 0) {
+			fprintf(stderr, "Failed to create send thread\n");
+			for (int i = 0; i < n_clients; i++) {
+				close(clients[i]);
+			}
+			exit(EXIT_FAILURE);
+		}
+	}
+
+
+	for (int i = 0; i < n_threads; i++) {
+		pthread_join(send_threads[i], NULL);
 	}
 
 	for (int i = 0; i < n_clients; i++) {

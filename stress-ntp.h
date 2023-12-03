@@ -14,9 +14,27 @@
 #include <time.h>
 #include <stdbool.h>
 #include <errno.h>
+#include <pthread.h>
+#include <fcntl.h>
 
 #include "sn_err.h"
 #include "sn_def.h"
+
+typedef struct {
+	int start_client;
+	int end_client;
+	int* clients;
+	in_addr_t daddr;
+} SendThreadArg;
+
+/**
+ * @brief Creates a socket to be used as a virtual NTP client
+ *
+ * @param[in] daddr Destination server address
+ * @param[out] sockfd File descriptor for the client socket
+ *
+ */
+int create_client(const in_addr_t daddr, int* sockfd);
 
 /**
  * @brief Resolves FQDN to an IP address
