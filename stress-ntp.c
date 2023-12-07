@@ -66,17 +66,34 @@ void* send_ntp(void* arg) {
 	memset(&packet, 0, sizeof(ntp_packet));
 	packet.li_vn_mode = (0 << 6) | (4 << 3) | 3; // LI=0, VN=4, Mode=3
 	
+	int rate = thread_arg->rate;
+	int n_clients = thread_arg->n_clients;
+
+	long interval_ns = rate > 0 ? 1000000000L / rate : 0;
+	struct timespec sleep_time, start_time, end_time;
+
 	for (int j = 0; j < thread_arg->reqs; j++) {
 		for (int i = thread_arg->start_client; i < thread_arg->end_client; 
 				i++) {
+			clock_gettime(CLOCK_MONOTONIC, &start_time);
 			if (sendto(thread_arg->clients[i], &packet, NTP_SIZE, 0, 
 					(struct sockaddr*)&ntp_server_sin, sizeof(ntp_server_sin)) 
 					< 0) {
 				fprintf(stderr, "Error sending packet\n");
 				exit(EXIT_FAILURE);
 			}
+			clock_gettime(CLOCK_MONOTONIC, &end_time);
+			long elapsed_ns = (end_time.tv_sec - start_time.tv_sec) 
+					* 1000000000L + (end_time.tv_nsec - start_time.tv_nsec);
+			long sleep_ns = interval_ns - elapsed_ns;
+			sleep_ns *= n_clients;
+
+			if (sleep_ns > 0) {
+				sleep_time.tv_sec = sleep_ns / 1000000000L;
+				sleep_time.tv_nsec = sleep_ns % 1000000000L;
+				nanosleep(&sleep_time, NULL);
+			}
 		}
-		usleep(1000);
 	}
 
 	return NULL;
@@ -90,12 +107,13 @@ int main(int argc, char** argv) {
 	int opt;
 	int req_count_opts = 0;
 	bool n_clients_specified = false;
+	int rate = SN_DEFAULT_RATE;
 
 	char usage_str[256];
 	strcpy(usage_str, "Usage: %s -h <hostname> [-c <clients>] "
-			"[-r <reqs_per_client>] [-t <total_reqs>]\n");
+			"[-r <reqs_per_client>] [-t <total_reqs>] [-R <rate>]\n");
 
-	while ((opt = getopt(argc, argv, "h:c:r:t:")) != -1) {
+	while ((opt = getopt(argc, argv, "h:c:r:t:R:")) != -1) {
 		switch (opt) {
 			case 'h':
 				host = optarg;
@@ -112,6 +130,9 @@ int main(int argc, char** argv) {
 			case 't':
 				total_reqs = atoi(optarg);
 				req_count_opts++;
+				break;
+			case 'R':
+				rate = atoi(optarg);
 				break;
 			default:
 				fprintf(stderr, usage_str, argv[0]);
@@ -139,6 +160,10 @@ int main(int argc, char** argv) {
 		} else {
 			n_clients = total_reqs / reqs_per_client;
 		}
+	}
+
+	if (rate <= 0) {
+		rate = INT_MAX;
 	}
 
 	in_addr_t daddr = 0;
@@ -188,6 +213,7 @@ int main(int argc, char** argv) {
 	printf("    Threads: %d\n", n_threads);
 	printf("    Packets per client: %d\n", reqs_per_client);
 	printf("    Total packets: %d\n", reqs_per_client * n_clients);
+	if (rate != INT_MAX) printf("    Target sendrate: %d\n", rate);
 
 	clock_gettime(CLOCK_MONOTONIC, &start_time);
 
@@ -200,6 +226,8 @@ int main(int argc, char** argv) {
 		send_thread_args[i].clients = clients;
 		send_thread_args[i].daddr = daddr;
 		send_thread_args[i].reqs = reqs_per_client;
+		send_thread_args[i].rate = rate;
+		send_thread_args[i].n_clients = n_clients;
 
 		start_client += clients_for_thread;
 
@@ -223,7 +251,7 @@ int main(int argc, char** argv) {
 			- start_time.tv_nsec) / 1e9;
 	
 	printf("Sent requests in %f seconds\n", dt);
-	printf("    Rate: %g pps\n", SN_DEFAULT_REQS_CLT * n_clients / dt);
+	printf("    Rate: %g pps\n", reqs_per_client * n_clients / dt);
 
 	for (int i = 0; i < n_clients; i++) {
 		close(clients[i]);

@@ -26,6 +26,8 @@ typedef struct {
 	int* clients;
 	in_addr_t daddr;
 	int reqs;
+	int rate;
+	int n_clients;
 } SendThreadArg;
 
 typedef struct {

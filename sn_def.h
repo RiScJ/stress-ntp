@@ -8,5 +8,6 @@
 #define SN_MIN_SPORT 			1024
 #define SN_DEFAULT_N_CLIENTS 	1
 #define SN_DEFAULT_REQS_CLT		1
+#define SN_DEFAULT_RATE			0
 
 #endif
