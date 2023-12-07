@@ -62,31 +62,84 @@ void* send_ntp(void* arg) {
 	ntp_server_sin.sin_port = htons(NTP_PORT);
 	ntp_server_sin.sin_addr.s_addr = thread_arg->daddr;
 
-	unsigned char packet[NTP_SIZE] = {0};
-	packet[0] = 0b11100011;
-
-	for (int j = 0; j < SN_DEFAULT_REQS_CLT; j++) {
-	for (int i = thread_arg->start_client; i < thread_arg->end_client; i++) {
-		if (sendto(thread_arg->clients[i], packet, NTP_SIZE, 0, 
-				(struct sockaddr*)&ntp_server_sin, sizeof(ntp_server_sin)) 
-				< 0) {
-			fprintf(stderr, "Error sending packet\n");
-			exit(EXIT_FAILURE);
+	ntp_packet packet;
+	memset(&packet, 0, sizeof(ntp_packet));
+	packet.li_vn_mode = (0 << 6) | (4 << 3) | 3; // LI=0, VN=4, Mode=3
+	
+	for (int j = 0; j < thread_arg->reqs; j++) {
+		for (int i = thread_arg->start_client; i < thread_arg->end_client; 
+				i++) {
+			if (sendto(thread_arg->clients[i], &packet, NTP_SIZE, 0, 
+					(struct sockaddr*)&ntp_server_sin, sizeof(ntp_server_sin)) 
+					< 0) {
+				fprintf(stderr, "Error sending packet\n");
+				exit(EXIT_FAILURE);
+			}
 		}
-	}
-	usleep(1000);
+		usleep(1000);
 	}
 
 	return NULL;
 }
 
 int main(int argc, char** argv) {
-	if (argc < 2) {
-		fprintf(stderr, "Insufficient arguments\n");
+	char* host = NULL;	
+	int n_clients = SN_DEFAULT_N_CLIENTS;
+	int reqs_per_client = SN_DEFAULT_REQS_CLT;
+	int total_reqs = 0;
+	int opt;
+	int req_count_opts = 0;
+	bool n_clients_specified = false;
+
+	char usage_str[256];
+	strcpy(usage_str, "Usage: %s -h <hostname> [-c <clients>] "
+			"[-r <reqs_per_client>] [-t <total_reqs>]\n");
+
+	while ((opt = getopt(argc, argv, "h:c:r:t:")) != -1) {
+		switch (opt) {
+			case 'h':
+				host = optarg;
+				break;
+			case 'c':
+				n_clients = atoi(optarg);
+				req_count_opts++;
+				n_clients_specified = true;
+				break;
+			case 'r':
+				reqs_per_client = atoi(optarg);
+				req_count_opts++;
+				break;
+			case 't':
+				total_reqs = atoi(optarg);
+				req_count_opts++;
+				break;
+			default:
+				fprintf(stderr, usage_str, argv[0]);
+				exit(EXIT_FAILURE);
+		}
+	}
+
+	if (host == NULL) {
+		fprintf(stderr, "Hostname (-h) is required.\n");
+		fprintf(stderr, usage_str, argv[0]);
+		exit(EXIT_FAILURE); 
+	}
+
+	if (req_count_opts > 2) {
+		fprintf(stderr, "Request-client relationship is overconstrained.\n");
+		fprintf(stderr, "Specify at most 2 of (-r -c -t).\n");
+		fprintf(stderr, "\n");
+		fprintf(stderr, usage_str, argv[0]);
 		exit(EXIT_FAILURE);
 	}
 
-	char* host = argv[1];	
+	if (total_reqs != 0) {
+		if (n_clients_specified) {
+			reqs_per_client = total_reqs / n_clients;
+		} else {
+			n_clients = total_reqs / reqs_per_client;
+		}
+	}
 
 	in_addr_t daddr = 0;
 	switch (resolve_fqdn(host, &daddr)) {
@@ -95,7 +148,6 @@ int main(int argc, char** argv) {
 			exit(EXIT_FAILURE);
 	}
     
-	int n_clients = SN_DEFAULT_N_CLIENTS;
 	int clients[n_clients];
 
 	srand(time(NULL));	
@@ -134,8 +186,8 @@ int main(int argc, char** argv) {
 	printf("Sending NTP requests...\n");
 	printf("    Clients: %d\n", n_clients);
 	printf("    Threads: %d\n", n_threads);
-	printf("    Packets per client: %d\n", SN_DEFAULT_REQS_CLT);
-	printf("    Total packets: %d\n", SN_DEFAULT_REQS_CLT * n_clients);
+	printf("    Packets per client: %d\n", reqs_per_client);
+	printf("    Total packets: %d\n", reqs_per_client * n_clients);
 
 	clock_gettime(CLOCK_MONOTONIC, &start_time);
 
@@ -147,6 +199,7 @@ int main(int argc, char** argv) {
 		send_thread_args[i].end_client = start_client + clients_for_thread;
 		send_thread_args[i].clients = clients;
 		send_thread_args[i].daddr = daddr;
+		send_thread_args[i].reqs = reqs_per_client;
 
 		start_client += clients_for_thread;
 

@@ -25,7 +25,22 @@ typedef struct {
 	int end_client;
 	int* clients;
 	in_addr_t daddr;
+	int reqs;
 } SendThreadArg;
+
+typedef struct {
+	uint8_t li_vn_mode;
+	uint8_t stratum;
+	uint8_t poll;
+	uint8_t precision;
+	uint32_t root_delay;
+	uint32_t root_dispersion;
+	uint32_t ref_id;
+	uint32_t ref_timestamp;
+	uint32_t orig_timestamp;
+	uint32_t recv_timestamp;
+	uint32_t trans_timestamp;
+} ntp_packet;
 
 /**
  * @brief Creates a socket to be used as a virtual NTP client
